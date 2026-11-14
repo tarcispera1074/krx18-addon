@@ -373,7 +373,9 @@ async function fetchCatalog({ catId, skip = 0, search = "", genre = "" }) {
     }
   }
 
-  cacheSet(catalogCache, cacheKey, deduped, CATALOG_TTL_MS);
+  if (deduped.length > 0) {
+    cacheSet(catalogCache, cacheKey, deduped, CATALOG_TTL_MS);
+  }
   return deduped;
 }
 
