@@ -11,7 +11,12 @@ import {
   parseHostList,
   normalizeHost,
 } from "./allowlist.js";
-import { resolve9Stream, resolveHoster, fetchWithTimeout } from "./resolver.js";
+import {
+  resolve9Stream,
+  resolveHoster,
+  fetchWithTimeout,
+  fetchPageHtml,
+} from "./resolver.js";
 
 const pkg = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), "package.json"), "utf8")
@@ -240,6 +245,30 @@ function parseArticle($, el, prefix = "krx18") {
   };
 }
 
+async function fetchJsonWithFallback(url, headers = {}) {
+  try {
+    const res = await fetchWithTimeout(url, { headers });
+    if (res.ok) {
+      const data = await res.json();
+      return data;
+    }
+  } catch {}
+
+  try {
+    const pr = await fetchWithTimeout(`https://r.jina.ai/${url}?_t=${Date.now()}`, {
+      headers: { "X-No-Cache": "true" },
+    });
+    if (pr.ok) {
+      const text = await pr.text();
+      const m = text.match(/\{[\s\S]*"embed_url"[\s\S]*\}/);
+      if (m) {
+        return JSON.parse(m[0]);
+      }
+    }
+  } catch {}
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // CATALOG SCRAPERS
 // ---------------------------------------------------------------------------
@@ -254,9 +283,9 @@ async function fetchCatalog({ catId, skip = 0, search = "", genre = "" }) {
     if (catId === "krx18_featured") {
       // 1. Featured 18+ (from krx18.com homepage carousel)
       if (skip === 0) {
-        const res = await fetchWithTimeout(KRX_BASE, { headers: { "user-agent": UA } });
-        if (res.ok) {
-          const $ = load(await res.text());
+        const html = await fetchPageHtml(KRX_BASE);
+        if (html) {
+          const $ = load(html);
           $("#featured-titles article").each((_, el) => {
             const item = parseArticle($, el, "krx18");
             if (item) metas.push(item);
@@ -265,9 +294,9 @@ async function fetchCatalog({ catId, skip = 0, search = "", genre = "" }) {
       }
     } else if (catId === "krx18_latest_home") {
       // 2. Latest Movies 18+ (from krx18.com homepage module)
-      const res = await fetchWithTimeout(KRX_BASE, { headers: { "user-agent": UA } });
-      if (res.ok) {
-        const $ = load(await res.text());
+      const html = await fetchPageHtml(KRX_BASE);
+      if (html) {
+        const $ = load(html);
         const allItems = [];
         $(".module:has(header:contains('Latest Movies')) article, .content:has(header:contains('Latest Movies')) article").each(
           (_, el) => {
@@ -288,9 +317,9 @@ async function fetchCatalog({ catId, skip = 0, search = "", genre = "" }) {
         targetUrl = `${KRX_BASE}/page/${page}/?s=${encodeURIComponent(search)}`;
       }
 
-      const res = await fetchWithTimeout(targetUrl, { headers: { "user-agent": UA } });
-      if (res.ok) {
-        const $ = load(await res.text());
+      const html = await fetchPageHtml(targetUrl);
+      if (html) {
+        const $ = load(html);
         $("article.item, article").each((_, el) => {
           const item = parseArticle($, el, "krx18");
           if (item) metas.push(item);
@@ -304,9 +333,9 @@ async function fetchCatalog({ catId, skip = 0, search = "", genre = "" }) {
         targetUrl = `${KRX_BASE}/page/${page}/?s=${encodeURIComponent(search)}`;
       }
 
-      const res = await fetchWithTimeout(targetUrl, { headers: { "user-agent": UA } });
-      if (res.ok) {
-        const $ = load(await res.text());
+      const html = await fetchPageHtml(targetUrl);
+      if (html) {
+        const $ = load(html);
         $("article.item, article").each((_, el) => {
           const item = parseArticle($, el, "krx18");
           if (item) metas.push(item);
@@ -320,9 +349,9 @@ async function fetchCatalog({ catId, skip = 0, search = "", genre = "" }) {
         targetUrl = `${JAVENG_BASE}/page/${page}/?s=${encodeURIComponent(search)}`;
       }
 
-      const res = await fetchWithTimeout(targetUrl, { headers: { "user-agent": UA } });
-      if (res.ok) {
-        const $ = load(await res.text());
+      const html = await fetchPageHtml(targetUrl);
+      if (html) {
+        const $ = load(html);
         $("article.item, article").each((_, el) => {
           const item = parseArticle($, el, "javeng");
           if (item) metas.push(item);
@@ -357,9 +386,8 @@ async function fetchMeta(pageUrl, prefix = "krx18") {
   if (cached && cached.description) return cached;
 
   try {
-    const res = await fetchWithTimeout(pageUrl, { headers: { "user-agent": UA } });
-    if (!res.ok) return cached || null;
-    const html = await res.text();
+    const html = await fetchPageHtml(pageUrl);
+    if (!html) return cached || null;
     const $ = load(html);
 
     const title =
@@ -448,9 +476,8 @@ async function resolveVideoFromPage(pageUrl) {
   if (cached) return cached;
 
   log("STREAM", `Resolving video from: ${pageUrl}`);
-  const res = await fetchWithTimeout(pageUrl, { headers: { "user-agent": UA } });
-  if (!res.ok) throw new Error(`Failed to load article page: ${res.status}`);
-  const html = await res.text();
+  const html = await fetchPageHtml(pageUrl);
+  if (!html) throw new Error("Failed to load article page");
   const $ = load(html);
 
   const baseOrigin = new URL(pageUrl).origin;
@@ -473,11 +500,11 @@ async function resolveVideoFromPage(pageUrl) {
   for (const opt of playerOptions) {
     const epUrl = `${baseOrigin}/wp-json/dooplayer/v2/${opt.post}/${opt.type}/${opt.nume}`;
     try {
-      const epRes = await fetchWithTimeout(epUrl, {
-        headers: { "user-agent": UA, referer: pageUrl },
+      const data = await fetchJsonWithFallback(epUrl, {
+        "user-agent": UA,
+        referer: pageUrl,
       });
-      if (!epRes.ok) continue;
-      const data = await epRes.json();
+      if (!data) continue;
       let embedUrl = data.embed_url;
       if (!embedUrl) continue;
       if (embedUrl.startsWith("//")) embedUrl = "https:" + embedUrl;

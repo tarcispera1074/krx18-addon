@@ -17,19 +17,37 @@ export async function fetchWithTimeout(url, opts = {}, timeoutMs = 15000) {
   }
 }
 
+export async function fetchPageHtml(url, customHeaders = {}) {
+  let html = "";
+  try {
+    const res = await fetchWithTimeout(url, {
+      headers: {
+        "user-agent": UA,
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+        ...customHeaders,
+      },
+    });
+    if (res.ok) html = await res.text();
+  } catch {}
+
+  if (!html || html.includes("<title>Just a moment...</title>") || html.includes("cf-browser-verification")) {
+    try {
+      const pr = await fetchWithTimeout(`https://r.jina.ai/${url}?_t=${Date.now()}`, {
+        headers: { "X-Return-Format": "html", "X-No-Cache": "true" },
+      });
+      if (pr.ok) html = await pr.text();
+    } catch {}
+  }
+  return html;
+}
+
 /**
  * Resolves 9stream player used by play.playkrx18.site
  */
 export async function resolve9Stream(embedUrl, pageReferer) {
-  const res = await fetchWithTimeout(embedUrl, {
-    headers: {
-      "user-agent": UA,
-      referer: pageReferer,
-      accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    },
-  });
-  if (!res.ok) throw new Error(`Embed fetch failed: status ${res.status}`);
-  const html = await res.text();
+  const html = await fetchPageHtml(embedUrl, { referer: pageReferer });
+  if (!html) throw new Error("Failed to load embed page");
   const $ = load(html);
 
   const fileMatch = html.match(/const\s+idfile_enc\s*=\s*["']([^"']+)["']/i);
@@ -166,15 +184,8 @@ export async function resolveHoster(embedUrl, pageReferer) {
   try {
     if (!isSafePublicHost(embedUrl)) return null;
 
-    const r = await fetchWithTimeout(embedUrl, {
-      headers: {
-        "user-agent": UA,
-        referer: pageReferer,
-        accept: "text/html,application/xhtml+xml,*/*",
-      },
-    });
-    if (!r.ok) return null;
-    const html = await r.text();
+    const html = await fetchPageHtml(embedUrl, { referer: pageReferer });
+    if (!html) return null;
     const $ = load(html);
     let fullText = html;
 
