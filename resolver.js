@@ -105,20 +105,35 @@ export async function resolve9Stream(embedUrl, pageReferer) {
       crypto,
       atob: (s) => Buffer.from(s, "base64").toString("binary"),
       btoa: (s) => Buffer.from(s, "binary").toString("base64"),
-      console: { log: () => {}, error: () => {}, warn: () => {} },
+      console: {
+        log: (...args) => console.log("[9STR_LOG]", ...args),
+        error: (...args) => console.error("[9STR_ERR]", ...args),
+        warn: (...args) => console.warn("[9STR_WARN]", ...args),
+      },
       fetch: async (url, opts) => {
         if (url.includes("view/")) return { ok: true, status: 200 };
-        const r = await fetchWithTimeout(url, {
-          ...opts,
-          headers: {
-            ...(opts?.headers || {}),
-            "user-agent": UA,
-            referer: embedUrl,
-            origin: embedHost,
-          },
-        });
-        const j = await r.json();
-        return { ok: r.ok, status: r.status, json: async () => j };
+        try {
+          const r = await fetchWithTimeout(url, {
+            ...opts,
+            headers: {
+              ...(opts?.headers || {}),
+              "user-agent": UA,
+              referer: embedUrl,
+              origin: embedHost,
+            },
+          });
+          const text = await r.text();
+          let j = {};
+          try {
+            j = JSON.parse(text);
+          } catch (pe) {
+            console.error("[9STR_JSON_ERR]", r.status, text.slice(0, 300));
+          }
+          return { ok: r.ok, status: r.status, json: async () => j };
+        } catch (fe) {
+          console.error("[9STR_FETCH_ERR]", fe.message);
+          throw fe;
+        }
       },
       document: {
         referrer: pageReferer,
@@ -149,7 +164,10 @@ export async function resolve9Stream(embedUrl, pageReferer) {
           reject(new Error("player_9stream received empty playlist"));
         }
       },
-      showMsg: () => {},
+      showMsg: (m) => {
+        clearTimeout(timeout);
+        reject(new Error(`9stream showMsg: ${m}`));
+      },
       jwplayer: () => ({ setup: () => {}, on: () => {} }),
     };
 
@@ -163,6 +181,11 @@ export async function resolve9Stream(embedUrl, pageReferer) {
       vm.runInContext(appJsCode, ctx);
 
       (async () => {
+        if (listeners.length === 0) {
+          clearTimeout(timeout);
+          reject(new Error("No DOMContentLoaded listener registered by 9stream script"));
+          return;
+        }
         for (const fn of listeners) {
           await fn();
         }
