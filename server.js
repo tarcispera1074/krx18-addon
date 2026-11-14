@@ -744,6 +744,46 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
+  if (p === "/debug/stream") {
+    const rawId = u.searchParams.get("id") || "";
+    const requested = extractPageUrl(rawId);
+    const pageUrl = normalizeSitePageUrl(requested);
+    const steps = [];
+    try {
+      steps.push({ step: "normalized", pageUrl });
+      const html = await fetchPageHtml(pageUrl);
+      steps.push({ step: "html", length: html?.length || 0 });
+      const $ = load(html || "");
+      const playerOptions = [];
+      $("#playeroptionsul li").each((_, li) => {
+        playerOptions.push({
+          post: $(li).attr("data-post"),
+          type: $(li).attr("data-type") || "movie",
+          nume: $(li).attr("data-nume"),
+          text: $(li).text().trim(),
+        });
+      });
+      steps.push({ step: "options", count: playerOptions.length, playerOptions });
+      const baseOrigin = new URL(pageUrl).origin;
+      for (const opt of playerOptions) {
+        const epUrl = `${baseOrigin}/wp-json/dooplayer/v2/${opt.post}/${opt.type}/${opt.nume}`;
+        const data = await fetchJsonWithFallback(epUrl, { "user-agent": UA, referer: pageUrl });
+        steps.push({ step: "opt_" + opt.nume, epUrl, data });
+        if (data?.embed_url) {
+          try {
+            const res = await resolve9Stream(data.embed_url, pageUrl);
+            steps.push({ step: "resolved9str", res });
+          } catch (e) {
+            steps.push({ step: "err9str", error: e.message });
+          }
+        }
+      }
+      return sendJson(req, res, 200, { ok: true, steps });
+    } catch (err) {
+      return sendJson(req, res, 500, { ok: false, error: err.message, steps });
+    }
+  }
+
   if (p === "/manifest.json" || p === "/mainfest.json") return sendJson(req, res, 200, manifest);
 
   if (p === "/") {
