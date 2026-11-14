@@ -715,7 +715,7 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  if (p === "/manifest.json") return sendJson(req, res, 200, manifest);
+  if (p === "/manifest.json" || p === "/mainfest.json") return sendJson(req, res, 200, manifest);
 
   if (p === "/") {
     return sendJson(req, res, 200, {
